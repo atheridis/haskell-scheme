@@ -1,41 +1,135 @@
 module Main (main) where
 
+import Data.Bifunctor
 import Data.Complex
 import Data.Ratio
 import Numeric (readBin, readFloat, readHex, readOct)
 import System.Environment
 import Text.ParserCombinators.Parsec hiding (spaces)
 
+data LispNum
+  = LInt Integer
+  | LRatio Rational
+  | LFloat Double
+  | LComplex (Complex Double)
+
+instance Enum LispNum where
+  toEnum = LInt . fromIntegral
+  fromEnum (LInt n) = fromIntegral n
+
+instance Eq LispNum where
+  (==) (LInt n) (LInt m) = n == m
+  (==) (LRatio n) (LRatio m) = n == m
+  (==) (LFloat n) (LFloat m) = n == m
+  (==) (LComplex n) (LComplex m) = n == m
+  (==) (LInt n) (LRatio m) = fromInteger n == m
+  (==) (LInt n) (LFloat m) = fromInteger n == m
+  (==) (LInt n) (LComplex m) = fromInteger n == m
+  (==) (LRatio n) (LFloat m) = fromRational n == m
+  (==) (LRatio n) (LComplex m) = fromRational n == m
+  (==) (LFloat n) (LComplex m) = (n :+ 0) == m
+  a == b = b == a
+
+instance Ord LispNum where
+  (<=) (LInt n) (LInt m) = n <= m
+  (<=) (LRatio n) (LRatio m) = n <= m
+  (<=) (LFloat n) (LFloat m) = n <= m
+  (<=) (LComplex n) (LComplex m) = (realPart . abs $ n) <= (realPart . abs $ m)
+  (<=) (LInt n) (LRatio m) = fromInteger n <= m
+  (<=) (LInt n) (LFloat m) = fromInteger n <= m
+  (<=) (LInt n) (LComplex m) = fromInteger n <= (realPart . abs $ m)
+  (<=) (LRatio n) (LFloat m) = fromRational n <= m
+  (<=) (LRatio n) (LComplex m) = fromRational n <= (realPart . abs $ m)
+  (<=) (LFloat n) (LComplex m) = n <= (realPart . abs $ m)
+  a <= b = b <= a
+
+instance Real LispNum where
+  toRational (LInt n) = toRational n
+  toRational (LRatio n) = n
+  toRational (LFloat n) = toRational n
+
+instance Integral LispNum where
+  quotRem (LInt n) (LInt m) = bimap LInt LInt $ quotRem n m
+  toInteger (LInt n) = n
+
+instance Show LispNum where
+  show (LInt n) = show n
+  show (LFloat f) = show f
+  show (LRatio r) = (show . numerator) r ++ "/" ++ (show . denominator) r
+  show (LComplex (a :+ b)) = show a ++ "+" ++ show b ++ "i"
+
+instance Fractional LispNum where
+  fromRational = LRatio
+  recip (LInt n) = LRatio . recip . fromInteger $ n
+  recip (LRatio n) = LRatio . recip $ n
+  recip (LFloat n) = LFloat . recip $ n
+  recip (LComplex n) = LComplex . recip $ n
+
+instance Num LispNum where
+  (+) (LInt n) (LInt m) = LInt (n + m)
+  (+) (LRatio n) (LRatio m) = LRatio (n + m)
+  (+) (LFloat n) (LFloat m) = LFloat (n + m)
+  (+) (LComplex n) (LComplex m) = LComplex (n + m)
+  (+) (LInt n) (LRatio m) = LRatio (n % 1 + m)
+  (+) (LInt n) (LFloat m) = LFloat (fromIntegral n + m)
+  (+) (LInt n) (LComplex m) = LComplex (fromIntegral n + m)
+  (+) (LRatio n) (LFloat m) = LFloat (fromRational n + m)
+  (+) (LRatio n) (LComplex m) = LComplex (fromRational n + m)
+  (+) (LFloat n) (LComplex m) = LComplex ((n :+ 0) + m)
+  a + b = b + a
+
+  (*) (LInt n) (LInt m) = LInt (n * m)
+  (*) (LRatio n) (LRatio m) = LRatio (n * m)
+  (*) (LFloat n) (LFloat m) = LFloat (n * m)
+  (*) (LComplex n) (LComplex m) = LComplex (n * m)
+  (*) (LInt n) (LRatio m) = LRatio (n % 1 * m)
+  (*) (LInt n) (LFloat m) = LFloat (fromIntegral n * m)
+  (*) (LInt n) (LComplex m) = LComplex (fromIntegral n * m)
+  (*) (LRatio n) (LFloat m) = LFloat (fromRational n * m)
+  (*) (LRatio n) (LComplex m) = LComplex (fromRational n * m)
+  (*) (LFloat n) (LComplex m) = LComplex ((n :+ 0) * m)
+  a * b = b * a
+
+  abs (LInt n) = LInt (abs n)
+  abs (LRatio n) = LRatio (abs n)
+  abs (LFloat n) = LFloat (abs n)
+  abs (LComplex n) = LComplex (abs n)
+
+  signum (LInt n) = LInt (signum n)
+  signum (LRatio n) = LRatio (signum n)
+  signum (LFloat n) = LFloat (signum n)
+  signum (LComplex n) = LComplex (signum n)
+
+  negate (LInt n) = LInt (negate n)
+  negate (LRatio n) = LRatio (negate n)
+  negate (LFloat n) = LFloat (negate n)
+  negate (LComplex n) = LComplex (negate n)
+
+  fromInteger = LInt
+
 data LispVal
   = Atom String
   | Bool Bool
   | Character Char
   | String String
-  | Number Integer
-  | Float Double
-  | Rational Rational
-  | Complex (Complex Double)
+  | Number LispNum
   | List [LispVal]
   | DottedList [LispVal] LispVal
 
-instance Show LispVal where show = showVal
-
-showVal :: LispVal -> String
-showVal (Atom a) = a
-showVal (Bool True) = "#t"
-showVal (Bool False) = "#f"
-showVal (Character c) = "#\\" ++ [c]
-showVal (String s) = "\"" ++ s ++ "\""
-showVal (Number n) = show n
-showVal (Float f) = show f
-showVal (Rational r) = (show . numerator) r ++ "/" ++ (show . denominator) r
-showVal (Complex (a :+ b)) = show a ++ "+" ++ show b ++ "i"
-showVal (List l) = "(" ++ (unwords . map showVal) l ++ ")"
-showVal (DottedList h t) = "(" ++ (unwords . map showVal) h ++ " . " ++ showVal t ++ ")"
+instance Show LispVal where
+  show (Atom a) = a
+  show (Bool True) = "#t"
+  show (Bool False) = "#f"
+  show (Character c) = "#\\" ++ [c]
+  show (String s) = "\"" ++ s ++ "\""
+  show (Number n) = show n
+  show (List l) = "(" ++ (unwords . map show) l ++ ")"
+  show (DottedList h t) = "(" ++ (unwords . map show) h ++ " . " ++ show t ++ ")"
 
 toDouble :: LispVal -> Double
-toDouble (Number n) = fromIntegral n
-toDouble (Float n) = realToFrac n
+toDouble (Number (LInt n)) = fromIntegral n
+toDouble (Number (LRatio n)) = (fromInteger . numerator $ n) / (fromInteger . denominator $ n)
+toDouble (Number (LFloat n)) = n
 
 spaces :: Parser ()
 spaces = skipMany1 space
@@ -43,11 +137,10 @@ spaces = skipMany1 space
 symbol :: Parser Char
 symbol = oneOf "!$%&|*+-/:<=>?@^_~"
 
-readExpr :: String -> String
+readExpr :: String -> LispVal
 readExpr input = case parse parseExpr "lisp" input of
-  Left err -> "No match: " ++ show err
-  -- Right var -> "Found value\n" ++ show var
-  Right var -> "Found " ++ showVal var
+  Left err -> String $ "No match: " ++ show err
+  Right val -> val
 
 parseString :: Parser LispVal
 parseString = do
@@ -73,7 +166,7 @@ parseAtom = do
   pure . Atom $ first : rest
 
 parseNumber :: Parser LispVal
-parseNumber = Number . read <$> (parseHex <|> parseOct <|> parseBin <|> parseDec)
+parseNumber = Number . LInt . read <$> (parseHex <|> parseOct <|> parseBin <|> parseDec)
   where
     parseOct :: Parser [Char]
     parseOct =
@@ -111,14 +204,14 @@ parseFloat = do
   x1 <- many1 digit
   char '.'
   x2 <- many1 digit
-  pure . Float . fst . head . readFloat $ x1 ++ "." ++ x2
+  pure . Number . LFloat . fst . head . readFloat $ x1 ++ "." ++ x2
 
 parseRatio :: Parser LispVal
 parseRatio = do
   x1 <- many1 digit
   char '/'
   x2 <- many1 digit
-  pure . Rational $ read x1 % read x2
+  pure . Number . LRatio $ read x1 % read x2
 
 parseComplex :: Parser LispVal
 parseComplex = do
@@ -126,7 +219,7 @@ parseComplex = do
   char '+'
   im <- try parseFloat <|> parseNumber
   char 'i'
-  pure . Complex $ toDouble real :+ toDouble im
+  pure . Number . LComplex $ toDouble real :+ toDouble im
 
 parseList :: Parser LispVal
 parseList = List <$> sepBy parseExpr spaces
@@ -159,7 +252,52 @@ parseExpr =
       char ')'
       pure x
 
+eval :: LispVal -> LispVal
+eval val@(String _) = val
+eval val@(Bool _) = val
+eval val@(Character _) = val
+eval val@(Number _) = val
+eval (List [Atom "quote", val]) = val
+eval (List (Atom func : args)) = apply func $ map eval args
+
+apply :: String -> [LispVal] -> LispVal
+apply func args = maybe (Bool False) ($ args) $ lookup func primitives
+
+primitives :: [(String, [LispVal] -> LispVal)]
+primitives =
+  [ ("+", lispBinOp (+)),
+    ("-", lispBinOp (-)),
+    ("*", lispBinOp (*)),
+    ("/", lispBinOp (/)),
+    ("mod", lispBinOp mod),
+    ("quotient", lispBinOp quot),
+    ("remainder", lispBinOp rem),
+    ("symbol?", Bool . all lispIsSymbol),
+    ("string?", Bool . all lispIsString),
+    ("number?", Bool . all lispIsNumber),
+    ("bool?", Bool . all lispIsBool),
+    ("list?", Bool . all lispIsList)
+  ]
+
+lispBinOp :: (LispNum -> LispNum -> LispNum) -> [LispVal] -> LispVal
+lispBinOp op = Number . foldl1 op . map unpackNum
+
+unpackNum :: LispVal -> LispNum
+unpackNum (Number n) = n
+unpackNum (List [Number n]) = n
+unpackNum _ = 0
+
+lispIsSymbol, lispIsString, lispIsNumber, lispIsBool, lispIsList :: LispVal -> Bool
+lispIsSymbol (Atom _) = True
+lispIsSymbol _ = False
+lispIsString (String _) = True
+lispIsString _ = False
+lispIsNumber (Number _) = True
+lispIsNumber _ = False
+lispIsBool (Bool _) = True
+lispIsBool _ = False
+lispIsList (List _) = True
+lispIsList _ = False
+
 main :: IO ()
-main = do
-  (expr : d) <- getArgs
-  putStrLn (readExpr expr)
+main = getArgs >>= print . eval . readExpr . head
