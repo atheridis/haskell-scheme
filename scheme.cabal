@@ -22,12 +22,17 @@ executable scheme
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
-    -- other-modules:
+    other-modules:
+        Lisp
+        LispNum
+        LispErrors
+        LispParse
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
     build-depends:
         base ^>=4.16.4.0,
-        parsec ^>=3.1.16.1
+        parsec ^>=3.1.16.1,
+        mtl ^>=2.2.2
     hs-source-dirs:   app
     default-language: Haskell2010
