@@ -10,6 +10,7 @@ data LispVal
   | Number LispNum
   | List [LispVal]
   | DottedList [LispVal] LispVal
+  deriving (Eq)
 
 instance Show LispVal where
   show (Atom a) = a

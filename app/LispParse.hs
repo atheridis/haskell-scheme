@@ -141,6 +141,12 @@ eval val@(Bool _) = pure val
 eval val@(Character _) = pure val
 eval val@(Number _) = pure val
 eval (List [Atom "quote", val]) = pure val
+eval (List [Atom "if", pred, conseq, alt]) = do
+  result <- eval pred
+  case result of
+    Bool True -> eval conseq
+    Bool False -> eval alt
+    _ -> throwError $ TypeMismatch "boolean" pred
 eval (List (Atom func : args)) = mapM eval args >>= apply func
 eval badForm = throwError $ BadSpecialForm "Unrecognised special form" badForm
 
@@ -151,31 +157,96 @@ apply func args =
     ($ args)
     (lookup func primitives)
 
+car :: [LispVal] -> ThrowsError LispVal
+car [List (x : _)] = pure x
+car [DottedList (x : _) _] = pure x
+car [badArg] = throwError $ TypeMismatch "pair" badArg
+car badArgList = throwError $ NumArgs 1 badArgList
+
+cdr :: [LispVal] -> ThrowsError LispVal
+cdr [List (_ : xs)] = pure $ List xs
+cdr [DottedList [] y] = pure y
+cdr [DottedList (_ : xs) y] = pure $ DottedList xs y
+cdr [badArg] = throwError $ TypeMismatch "pair" badArg
+cdr badArgList = throwError $ NumArgs 1 badArgList
+
+cons :: [LispVal] -> ThrowsError LispVal
+-- cons [x1, List []] = pure $ List [x1]
+cons [x, List xs] = pure $ List $ x : xs
+cons [x, DottedList xs y] = pure $ DottedList (x : xs) y
+cons [x1, x2] = pure $ DottedList [x1] x2
+cons badArgList = throwError $ NumArgs 2 badArgList
+
+eqv :: [LispVal] -> ThrowsError LispVal
+eqv [Bool arg1, Bool arg2] = pure . Bool $ arg1 == arg2
+eqv [Number arg1, Number arg2] = pure . Bool $ arg1 == arg2
+eqv [String arg1, String arg2] = pure . Bool $ arg1 == arg2
+eqv [Atom arg1, Atom arg2] = pure . Bool $ arg1 == arg2
+eqv [DottedList xs x, DottedList ys y] = eqv [List $ xs ++ [x], List $ ys ++ [y]]
+eqv [List arg1, List arg2] = pure . Bool $ (length arg1 == length arg2) && all eqvPair (zip arg1 arg2)
+  where
+    eqvPair (x1, x2) = case eqv [x1, x2] of
+      Left err -> False
+      Right (Bool val) -> val
+eqv [_, _] = pure $ Bool False
+eqv badArgList = throwError $ NumArgs 2 badArgList
+
 primitives :: [(String, [LispVal] -> ThrowsError LispVal)]
 primitives =
-  [ ("+", lispBinOp (+)),
-    ("-", lispBinOp (-)),
-    ("*", lispBinOp (*)),
-    ("/", lispBinOp (/)),
-    ("mod", lispBinOp mod),
-    ("quotient", lispBinOp quot),
-    ("remainder", lispBinOp rem),
+  [ ("+", lispOp (+)),
+    ("-", lispOp (-)),
+    ("*", lispOp (*)),
+    ("/", lispOp (/)),
+    ("mod", lispOp mod),
+    ("quotient", lispOp quot),
+    ("remainder", lispOp rem),
     ("symbol?", Right . Bool . all lispIsSymbol),
     ("string?", Right . Bool . all lispIsString),
     ("number?", Right . Bool . all lispIsNumber),
     ("bool?", Right . Bool . all lispIsBool),
-    ("list?", Right . Bool . all lispIsList)
+    ("list?", Right . Bool . all lispIsList),
+    ("=", lispBinOp unpackNum (==)),
+    ("<", lispBinOp unpackNum (<)),
+    (">", lispBinOp unpackNum (>)),
+    ("<=", lispBinOp unpackNum (<=)),
+    (">=", lispBinOp unpackNum (>=)),
+    ("/=", lispBinOp unpackNum (/=)),
+    ("||", lispBinOp unpackBool (||)),
+    ("&&", lispBinOp unpackBool (&&)),
+    ("string=?", lispBinOp unpackStr (==)),
+    ("string<?", lispBinOp unpackStr (<)),
+    ("string>?", lispBinOp unpackStr (>)),
+    ("string<=?", lispBinOp unpackStr (<=)),
+    ("string>=?", lispBinOp unpackStr (>=)),
+    ("car", car),
+    ("cdr", cdr),
+    ("cons", cons),
+    ("eq?", eqv),
+    ("eqv?", eqv)
   ]
 
-lispBinOp :: (LispNum -> LispNum -> LispNum) -> [LispVal] -> ThrowsError LispVal
-lispBinOp op [] = throwError $ NumArgs 2 []
-lispBinOp op singleVal@[_] = throwError $ NumArgs 2 singleVal
-lispBinOp op params = Number . foldl1 op <$> mapM unpackNum params
+lispOp :: (LispNum -> LispNum -> LispNum) -> [LispVal] -> ThrowsError LispVal
+lispOp op [] = throwError $ NumArgs 2 []
+lispOp op singleVal@[_] = throwError $ NumArgs 2 singleVal
+lispOp op params = Number . foldl1 op <$> mapM unpackNum params
+
+lispBinOp :: (LispVal -> ThrowsError a) -> (a -> a -> Bool) -> [LispVal] -> ThrowsError LispVal
+lispBinOp unpacker op params
+  | length params /= 2 = throwError $ NumArgs 2 params
+  | otherwise = Bool <$> liftM2 op (unpacker . head $ params) (unpacker . last $ params)
 
 unpackNum :: LispVal -> ThrowsError LispNum
 unpackNum (Number n) = pure n
 unpackNum (List [Number n]) = pure n
 unpackNum notNum = throwError $ TypeMismatch "number" notNum
+
+unpackBool :: LispVal -> ThrowsError Bool
+unpackBool (Bool b) = pure b
+unpackBool notBool = throwError $ TypeMismatch "boolean" notBool
+
+unpackStr :: LispVal -> ThrowsError String
+unpackStr (String s) = pure s
+unpackStr notString = throwError $ TypeMismatch "string" notString
 
 lispIsSymbol, lispIsString, lispIsNumber, lispIsBool, lispIsList :: LispVal -> Bool
 lispIsSymbol (Atom _) = True
