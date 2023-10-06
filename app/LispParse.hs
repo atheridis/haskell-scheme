@@ -6,6 +6,7 @@ import Data.Ratio (denominator, numerator, (%))
 import Lisp
 import LispErrors
 import LispNum
+import LispState (Env, defineVar, getVar, setVar)
 import Numeric (readBin, readFloat, readHex, readOct)
 import Text.ParserCombinators.Parsec hiding (spaces)
 
@@ -135,20 +136,25 @@ parseExpr =
       char ')'
       pure x
 
-eval :: LispVal -> ThrowsError LispVal
-eval val@(String _) = pure val
-eval val@(Bool _) = pure val
-eval val@(Character _) = pure val
-eval val@(Number _) = pure val
-eval (List [Atom "quote", val]) = pure val
-eval (List [Atom "if", pred, conseq, alt]) = do
-  result <- eval pred
+eval :: Env -> LispVal -> IOThrowsError LispVal
+eval env val@(String _) = pure val
+eval env val@(Bool _) = pure val
+eval env val@(Character _) = pure val
+eval env val@(Number _) = pure val
+eval env (Atom id) = getVar env id
+eval env (List [Atom "quote", val]) = pure val
+eval env (List [Atom "if", pred, conseq, alt]) = do
+  result <- eval env pred
   case result of
-    Bool True -> eval conseq
-    Bool False -> eval alt
+    Bool True -> eval env conseq
+    Bool False -> eval env alt
     _ -> throwError $ TypeMismatch "boolean" pred
-eval (List (Atom func : args)) = mapM eval args >>= apply func
-eval badForm = throwError $ BadSpecialForm "Unrecognised special form" badForm
+eval env (List [Atom "set!", Atom var, form]) =
+  eval env form >>= setVar env var
+eval env (List [Atom "define", Atom var, form]) =
+  eval env form >>= defineVar env var
+eval env (List (Atom func : args)) = mapM (eval env) args >>= liftThrows . apply func
+eval env badForm = throwError $ BadSpecialForm "Unrecognised special form" badForm
 
 apply :: String -> [LispVal] -> ThrowsError LispVal
 apply func args =
