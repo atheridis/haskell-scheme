@@ -2,11 +2,10 @@ module LispParse where
 
 import Control.Monad.Except
 import Data.Complex (Complex (..))
+import Data.Maybe (isNothing)
 import Data.Ratio (denominator, numerator, (%))
-import Lisp
-import LispErrors
 import LispNum
-import LispState (Env, defineVar, getVar, setVar)
+import LispTypes
 import Numeric (readBin, readFloat, readHex, readOct)
 import Text.ParserCombinators.Parsec hiding (spaces)
 
@@ -153,15 +152,35 @@ eval env (List [Atom "set!", Atom var, form]) =
   eval env form >>= setVar env var
 eval env (List [Atom "define", Atom var, form]) =
   eval env form >>= defineVar env var
-eval env (List (Atom func : args)) = mapM (eval env) args >>= liftThrows . apply func
+eval env (List (Atom "define" : List (Atom var : params) : body)) =
+  makeNormalFunc env params body >>= defineVar env var
+eval env (List (Atom "define" : DottedList (Atom var : params) varargs : body)) =
+  makeVarArgs varargs env params body >>= defineVar env var
+eval env (List (Atom "lambda" : List params : body)) =
+  makeNormalFunc env params body
+eval env (List (Atom "lambda" : DottedList params varargs : body)) =
+  makeVarArgs varargs env params body
+eval env (List (Atom "lambda" : varargs@(Atom _) : body)) =
+  makeVarArgs varargs env [] body
+-- eval env (List (Atom func : args)) = mapM (eval env) args >>= liftThrows . apply func
+eval env (List (function : args)) = do
+  func <- eval env function
+  argVals <- mapM (eval env) args
+  apply func argVals
 eval env badForm = throwError $ BadSpecialForm "Unrecognised special form" badForm
 
-apply :: String -> [LispVal] -> ThrowsError LispVal
-apply func args =
-  maybe
-    (throwError $ NotFunction "Unrecognised primitive function args" func)
-    ($ args)
-    (lookup func primitives)
+apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
+apply (PrimitiveFunc func) args = liftThrows $ func args
+apply (Func params varargs body closure) args
+  | num params /= num args && isNothing varargs = throwError $ NumArgs (num params) args
+  | otherwise = liftIO (bindVars closure $ zip params args) >>= bindVarArgs varargs >>= evalBody
+  where
+    remainingArgs = drop (length params) args
+    num = toInteger . length
+    evalBody env = last <$> mapM (eval env) body
+    bindVarArgs arg env = case arg of
+      Just argName -> liftIO $ bindVars env [(argName, List remainingArgs)]
+      Nothing -> pure env
 
 car :: [LispVal] -> ThrowsError LispVal
 car [List (x : _)] = pure x
@@ -265,3 +284,14 @@ lispIsBool (Bool _) = True
 lispIsBool _ = False
 lispIsList (List _) = True
 lispIsList _ = False
+
+primitiveBindings :: IO Env
+primitiveBindings = nullEnv >>= (`bindVars` (makePrimitiveFunc <$> primitives))
+  where
+    makePrimitiveFunc (var, func) = (var, PrimitiveFunc func)
+
+makeFunc varargs env params body = pure $ Func (map show params) varargs body env
+
+makeNormalFunc = makeFunc Nothing
+
+makeVarArgs = makeFunc . Just . show
